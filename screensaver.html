@@ -48,7 +48,9 @@
         const SNAKE_VERTEBRA_COUNT = 56;
         const VERTEBRA_SPACING = 13;
 
-        const ORBIT_CAPTURE_DISTANCE = 34;
+        const ORBIT_CAPTURE_DISTANCE = 74;
+        /** Start curving into orbit before full capture to avoid jitter near the cursor. */
+        const ORBIT_BLEND_DISTANCE = 170;
         /** Leave orbit when the cursor is moving faster than this (px/s). */
         const ORBIT_BREAK_CURSOR_SPEED = 400;
         const ORBIT_RADIUS = 52;
@@ -82,6 +84,7 @@
           vertebrae: [],
           mode: "chase",
           orbitAngle: 0,
+          orbitRadius: ORBIT_RADIUS,
         };
 
         function clamp(v, a, b) {
@@ -183,17 +186,25 @@
             if (!staleCursor && snake.mode === "chase" && dist < ORBIT_CAPTURE_DISTANCE) {
               snake.mode = "orbit";
               snake.orbitAngle = Math.atan2(snake.y - cursor.y, snake.x - cursor.x);
+              snake.orbitRadius = Math.hypot(snake.x - cursor.x, snake.y - cursor.y);
               orbitActive = true;
             }
           }
 
           if (orbitActive) {
             snake.orbitAngle += dt * ORBIT_RADIANS_PER_SEC;
-            snake.x = cursor.x + Math.cos(snake.orbitAngle) * ORBIT_RADIUS;
-            snake.y = cursor.y + Math.sin(snake.orbitAngle) * ORBIT_RADIUS;
+            snake.orbitRadius = lerp(
+              snake.orbitRadius,
+              ORBIT_RADIUS,
+              1 - Math.exp(-dt * 6.5)
+            );
+            snake.x = cursor.x + Math.cos(snake.orbitAngle) * snake.orbitRadius;
+            snake.y = cursor.y + Math.sin(snake.orbitAngle) * snake.orbitRadius;
             snake.heading = snake.orbitAngle + Math.PI * 0.5;
-            snake.vx = Math.cos(snake.heading) * ORBIT_RADIUS * ORBIT_RADIANS_PER_SEC;
-            snake.vy = Math.sin(snake.heading) * ORBIT_RADIUS * ORBIT_RADIANS_PER_SEC;
+            snake.vx =
+              Math.cos(snake.heading) * snake.orbitRadius * ORBIT_RADIANS_PER_SEC;
+            snake.vy =
+              Math.sin(snake.heading) * snake.orbitRadius * ORBIT_RADIANS_PER_SEC;
             snake.speedNorm = 1;
             snake.slitherPhase += dt * (0.38 + snake.speedNorm * 0.55);
           } else {
@@ -212,8 +223,31 @@
 
             const maxSpeed = 230;
             const targetSpeed = dist > 8 ? Math.min(maxSpeed, 48 + dist * 0.38) : 0;
-            const dirX = dist > 0.6 ? toX / dist : forwardX;
-            const dirY = dist > 0.6 ? toY / dist : forwardY;
+            let dirX = dist > 0.6 ? toX / dist : forwardX;
+            let dirY = dist > 0.6 ? toY / dist : forwardY;
+
+            if (!staleCursor) {
+              const blendDenom = Math.max(
+                1,
+                ORBIT_BLEND_DISTANCE - ORBIT_CAPTURE_DISTANCE
+              );
+              const orbitBlend = clamp(
+                (ORBIT_BLEND_DISTANCE - dist) / blendDenom,
+                0,
+                1
+              );
+              if (orbitBlend > 0) {
+                const tangentX = -dirY;
+                const tangentY = dirX;
+                // Bias heading tangentially as we approach the cursor for a gradual orbit handoff.
+                dirX = lerp(dirX, tangentX, orbitBlend * 0.7);
+                dirY = lerp(dirY, tangentY, orbitBlend * 0.7);
+                const dirLen = Math.hypot(dirX, dirY) || 1;
+                dirX /= dirLen;
+                dirY /= dirLen;
+              }
+            }
+
             const wantVx = dirX * targetSpeed;
             const wantVy = dirY * targetSpeed;
             const follow = 1 - Math.exp(-dt * 2.2);
